@@ -11,9 +11,10 @@ export const TaskListApp = () => {
   const variant = useVariantInfo();
   const [newTaskText, setNewTaskText] = useState("");
 
-  // The element's real value is only ever non-null once every task is checked off (see setTasks
-  // below), so a not-yet-finished checklist can't be read back from it after a page reload. To
-  // survive that, the working list is also cached in this browser via localStorage.
+  // The element's real value is only ever non-null once the list is fulfilled - empty, or every
+  // task checked off (see the sync effect below) - so a not-yet-finished checklist can't be read
+  // back from it after a page reload. To survive that, the working list is also cached in this
+  // browser via localStorage.
   const draftKey = `kontent-tasklist-draft:${environmentId}:${item.id}:${variant.id}`;
   const [tasks, setTasksState] = useState<Value>(() => value ?? readDraft(draftKey) ?? []);
 
@@ -28,8 +29,15 @@ export const TaskListApp = () => {
   const setTasks = useCallback((next: Value) => {
     setTasksState(next);
     writeDraft(draftKey, next);
-    setValue(isFulfilled(next) ? next : null);
-  }, [draftKey, setValue]);
+  }, [draftKey]);
+
+  // Keep Kontent.ai's real value in sync with the working list, including on first render -
+  // e.g. a brand new item with no tasks yet is fulfilled too, and must be reported as such
+  // without requiring the user to add/remove a task first.
+  useEffect(() => {
+    setValue(isFulfilled(tasks) ? tasks : null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tasks]);
 
   const addTask = () => {
     const text = newTaskText.trim();
@@ -52,7 +60,7 @@ export const TaskListApp = () => {
     <div className="task-list">
       <p className={`task-list__status ${complete ? "task-list__status--complete" : "task-list__status--incomplete"}`}>
         {tasks.length === 0
-          ? "Add at least one task. This item can't be published until all tasks are checked off."
+          ? "No tasks added — this item can be published."
           : complete
             ? `All ${tasks.length} task${tasks.length === 1 ? "" : "s"} done — this item can be published.`
             : `${doneCount} / ${tasks.length} tasks done — finish them all before publishing.`}
