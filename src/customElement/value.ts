@@ -31,7 +31,8 @@ const isValidTask = (value: unknown): value is Task =>
   typeof (value as Task).text === "string" &&
   typeof (value as Task).done === "boolean";
 
-// The element only ever reports a non-null value to Kontent.ai once every task is done.
-// That is what lets the "Required" validation on this element gate publishing.
+// The element only ever reports a non-null value to Kontent.ai once every task is done
+// (an empty task list counts as fulfilled too). That is what lets the "Required"
+// validation on this element gate publishing.
 export const isFulfilled = (tasks: Value): boolean =>
-  tasks.length > 0 && tasks.every(task => task.done);
+  tasks.every(task => task.done);
