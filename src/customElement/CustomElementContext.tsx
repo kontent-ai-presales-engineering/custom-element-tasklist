@@ -1,11 +1,12 @@
-import React, { ReactNode, useContext, useEffect, useLayoutEffect, useMemo, useState } from "react";
-import { Value, parseValue } from "./value";
+import React, { ReactNode, useContext, useEffect, useMemo, useState } from "react";
 
 // hooks are only ever used in the react tree so this is fine
 /* eslint-disable react-refresh/only-export-components */
 export const useValue = () => [useContext(Context).value, useContext(Context).setValue] as const;
 
 export const useIsDisabled = () => useContext(Context).isDisabled;
+
+export const useConfig = () => useContext(Context).config;
 
 export const useEnvironmentId = () => useContext(Context).environmentId;
 
@@ -19,9 +20,11 @@ type ItemInfo = Readonly<{
 }> & ItemChangedDetails;
 
 type CustomElementContextValue = Readonly<{
-  value: Value | null;
-  setValue: (newValue: Value | null) => void;
+  // The raw stored value; the task list and the publish gate each interpret it their own way.
+  value: string | null;
+  setValue: (newValue: string | null) => void;
   isDisabled: boolean;
+  config: Readonly<Record<string, unknown>> | null;
   environmentId: string;
   item: ItemInfo;
   variant: Readonly<{
@@ -37,7 +40,8 @@ type CustomElementContextProps = Readonly<{
 
 export const CustomElementContext = (props: CustomElementContextProps) => {
   const [isDisabled, setIsDisabled] = useState(false);
-  const [value, setValue] = useState<Value | null | typeof specialMissingValue>(specialMissingValue);
+  const [value, setValue] = useState<string | null | typeof specialMissingValue>(specialMissingValue);
+  const [config, setConfig] = useState<Readonly<Record<string, unknown>> | null>(null);
   const [environmentId, setEnvironmentId] = useState<string | null>(null);
   const [item, setItem] = useState<ItemInfo | null>(null);
   const [variant, setVariant] = useState<Readonly<{ id: string; codename: string }> | null>(null);
@@ -48,28 +52,24 @@ export const CustomElementContext = (props: CustomElementContextProps) => {
     }
     return {
       value,
-      // Anything other than `null` counts as a filled-in value for Kontent.ai's "Required"
-      // validation, so callers decide what to pass in based on whether the checklist is done.
-      setValue: (newValue: Value | null) => {
-        CustomElement.setValue(newValue === null ? null : JSON.stringify(newValue));
+      // Anything other than `null` counts as a filled-in value for Kontent.ai's "Required" validation.
+      setValue: (newValue: string | null) => {
+        CustomElement.setValue(newValue);
         setValue(newValue);
       },
       isDisabled,
+      config,
       environmentId,
       item,
       variant,
     };
-  }, [value, isDisabled, environmentId, item, variant]);
+  }, [value, isDisabled, config, environmentId, item, variant]);
 
   useEffect(() => {
     CustomElement.init((element, ctx) => {
-      const parsedValue = parseValue(element.value);
-      if (parsedValue === "invalidValue") {
-        console.warn(`Custom element received invalid value "${element.value}". Treating it as a missing value.`);
-      }
-
-      setValue(parsedValue === "invalidValue" ? null : parsedValue);
+      setValue(element.value);
       setIsDisabled(element.disabled);
+      setConfig(element.config);
       setEnvironmentId(ctx.projectId);
       setItem(ctx.item);
       setVariant(ctx.variant);
@@ -84,7 +84,7 @@ export const CustomElementContext = (props: CustomElementContextProps) => {
     CustomElement.onDisabledChanged(setIsDisabled);
   }, []);
 
-  useDynamicHeight(props.height === "dynamic", value);
+  useDynamicHeight(props.height === "dynamic");
 
   useEffect(() => {
     if (typeof props.height === "number") {
@@ -116,18 +116,24 @@ const Context = React.createContext<CustomElementContextValue>({
   },
   environmentId: "",
   isDisabled: true,
+  config: null,
   setValue: () => { },
 });
 
-const useDynamicHeight = (isEnabled: boolean, value: Value | null | typeof specialMissingValue) => {
-  useLayoutEffect(() => {
+// Follows the rendered content's size rather than the value, since the UI can grow without the
+// value changing (e.g. expanding the task history, or the gate reacting to another element).
+const useDynamicHeight = (isEnabled: boolean) => {
+  useEffect(() => {
     if (!isEnabled) {
       return;
     }
-    const newSize = Math.max(document.documentElement.offsetHeight, 100);
+    const update = () => CustomElement.setHeight(Math.ceil(Math.max(document.documentElement.offsetHeight, 50)));
+    const observer = new ResizeObserver(update);
+    observer.observe(document.body);
+    update();
 
-    CustomElement.setHeight(Math.ceil(newSize));
-  }, [value, isEnabled]); // recalculate the size when value changes
+    return () => observer.disconnect();
+  }, [isEnabled]);
 };
 
 const specialMissingValue = "This value is special and indicates that a value is missing. This allows having undefined and null as valid values." as const;

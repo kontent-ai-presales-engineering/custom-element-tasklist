@@ -1,7 +1,7 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
 import { EnsureKontentAsParent } from "./customElement/EnsureKontentAsParent";
-import { TaskListApp } from "./TaskListApp";
+import { App } from "./App";
 import { CustomElementContext } from "./customElement/CustomElementContext";
 
 const rootElement = document.getElementById("root");
@@ -16,7 +16,7 @@ root.render(
   <React.StrictMode>
     <EnsureKontentAsParent>
       <CustomElementContext height="dynamic">
-        <TaskListApp />
+        <App />
       </CustomElementContext>
     </EnsureKontentAsParent>
   </React.StrictMode>

@@ -13,6 +13,7 @@ declare global {
   type CustomElementInitData = Readonly<{
     value: string | null;
     disabled: boolean;
+    config: Readonly<Record<string, unknown>> | null;
   }>;
 
   type CustomElementInitContext = Readonly<{
@@ -27,5 +28,8 @@ declare global {
     setHeight: (height: number) => void;
     onDisabledChanged: (callback: (disabled: boolean) => void) => void;
     observeItemChanges: (callback: (item: ItemChangedDetails) => void) => void;
+    // A custom element's value comes back as a string (or null when empty).
+    getElementValue: (elementCodename: string, callback: (value: unknown) => void) => void;
+    observeElementChanges: (elementCodenames: ReadonlyArray<string>, callback: (changedElementCodenames: ReadonlyArray<string>) => void) => void;
   }>;
 }

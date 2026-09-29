@@ -1,74 +1,80 @@
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useEnvironmentId, useIsDisabled, useItemInfo, useValue, useVariantInfo } from "./customElement/CustomElementContext";
-import { Value, isFulfilled } from "./customElement/value";
+import { Task, TaskEvent, TaskEventType, Value, activeTasks, isFulfilled, parseValue, serializeValue } from "./customElement/value";
 import "./TaskListApp.css";
 
 export const TaskListApp = () => {
-  const [value, setValue] = useValue();
+  const [rawValue, setRawValue] = useValue();
   const isDisabled = useIsDisabled();
   const environmentId = useEnvironmentId();
   const item = useItemInfo();
   const variant = useVariantInfo();
   const [newTaskText, setNewTaskText] = useState("");
+  const [showHistory, setShowHistory] = useState(false);
 
-  // The element's real value is only ever non-null once the list is fulfilled - empty, or every
-  // task checked off (see the sync effect below) - so a not-yet-finished checklist can't be read
-  // back from it after a page reload. To survive that, the working list is also cached in this
-  // browser via localStorage.
-  const draftKey = `kontent-tasklist-draft:${environmentId}:${item.id}:${variant.id}`;
-  const [tasks, setTasksState] = useState<Value>(() => value ?? readDraft(draftKey) ?? []);
-
-  // If Kontent.ai hands us a fresh non-null value (e.g. the item was loaded with an already
-  // completed checklist), let it take over as the source of truth.
-  useEffect(() => {
-    if (value !== null) {
-      setTasksState(value);
+  // Every change is written to the element's value (including removed tasks as tombstones), so each
+  // Kontent.ai version of the item holds the task list and its history as they were at that time.
+  const tasks = useMemo(() => {
+    const parsed = parseValue(rawValue);
+    if (parsed === "invalidValue") {
+      console.warn(`Custom element received invalid value "${rawValue}". Treating it as an empty task list.`);
+      return [];
     }
-  }, [value]);
+    return parsed ?? [];
+  }, [rawValue]);
 
-  const setTasks = useCallback((next: Value) => {
-    setTasksState(next);
-    writeDraft(draftKey, next);
-  }, [draftKey]);
+  const setTasks = (next: Value) => setRawValue(serializeValue(next));
 
-  // Keep Kontent.ai's real value in sync with the working list, including on first render -
-  // e.g. a brand new item with no tasks yet is fulfilled too, and must be reported as such
-  // without requiring the user to add/remove a task first.
+  // Earlier versions of this element only stored the list once it was complete and kept unfinished
+  // lists in localStorage. Move such a draft into the real value the first time it's opened for editing.
   useEffect(() => {
-    setValue(isFulfilled(tasks) ? tasks : null);
+    const legacyDraftKey = `kontent-tasklist-draft:${environmentId}:${item.id}:${variant.id}`;
+    if (rawValue !== null || isDisabled) {
+      return;
+    }
+    const draft = readLegacyDraft(legacyDraftKey);
+    if (draft && draft.length > 0) {
+      setTasks(draft);
+    }
+    removeLegacyDraft(legacyDraftKey);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tasks]);
+  }, []);
 
   const addTask = () => {
     const text = newTaskText.trim();
     if (!text) {
       return;
     }
-    setTasks([...tasks, { id: crypto.randomUUID(), text, done: false }]);
+    setTasks([...tasks, { id: crypto.randomUUID(), text, done: false, removed: false, events: [createEvent("added")] }]);
     setNewTaskText("");
   };
 
-  const removeTask = (id: string) => setTasks(tasks.filter(task => task.id !== id));
+  const removeTask = (id: string) =>
+    setTasks(tasks.map(task => task.id === id ? { ...task, removed: true, events: [...task.events, createEvent("removed")] } : task));
 
   const toggleTask = (id: string) =>
-    setTasks(tasks.map(task => task.id === id ? { ...task, done: !task.done } : task));
+    setTasks(tasks.map(task => task.id === id
+      ? { ...task, done: !task.done, events: [...task.events, createEvent(task.done ? "reopened" : "completed")] }
+      : task));
 
-  const doneCount = tasks.filter(task => task.done).length;
+  const visibleTasks = activeTasks(tasks);
+  const doneCount = visibleTasks.filter(task => task.done).length;
   const complete = isFulfilled(tasks);
+  const history = collectHistory(tasks);
 
   return (
     <div className="task-list">
       <p className={`task-list__status ${complete ? "task-list__status--complete" : "task-list__status--incomplete"}`}>
-        {tasks.length === 0
+        {visibleTasks.length === 0
           ? "No tasks added — this item can be published."
           : complete
-            ? `All ${tasks.length} task${tasks.length === 1 ? "" : "s"} done — this item can be published.`
-            : `${doneCount} / ${tasks.length} tasks done — finish them all before publishing.`}
+            ? `All ${visibleTasks.length} task${visibleTasks.length === 1 ? "" : "s"} done — this item can be published.`
+            : `${doneCount} / ${visibleTasks.length} tasks done — finish them all before publishing.`}
       </p>
 
-      {tasks.length > 0 && (
+      {visibleTasks.length > 0 && (
         <ul className="task-list__items">
-          {tasks.map(task => (
+          {visibleTasks.map(task => (
             <li key={task.id} className="task-list__item">
               <label className="task-list__label">
                 <input
@@ -77,8 +83,11 @@ export const TaskListApp = () => {
                   disabled={isDisabled}
                   onChange={() => toggleTask(task.id)}
                 />
-                <span className={task.done ? "task-list__text task-list__text--done" : "task-list__text"}>
-                  {task.text}
+                <span className="task-list__content">
+                  <span className={task.done ? "task-list__text task-list__text--done" : "task-list__text"}>
+                    {task.text}
+                  </span>
+                  <TaskMeta task={task} />
                 </span>
               </label>
               <button
@@ -115,32 +124,98 @@ export const TaskListApp = () => {
           Add
         </button>
       </form>
+
+      {history.length > 0 && (
+        <div className="task-list__history">
+          <button
+            type="button"
+            className="task-list__history-toggle"
+            aria-expanded={showHistory}
+            onClick={() => setShowHistory(!showHistory)}
+          >
+            {showHistory ? "Hide history" : `Show history (${history.length})`}
+          </button>
+          {showHistory && (
+            <ol className="task-list__history-items">
+              {history.map(entry => (
+                <li key={`${entry.task.id}-${entry.index}`} className="task-list__history-item">
+                  <time className="task-list__history-time" dateTime={entry.event.at}>{formatTime(entry.event.at)}</time>
+                  <span>
+                    {eventLabels[entry.event.type]} <q className="task-list__history-task">{entry.task.text}</q>
+                  </span>
+                </li>
+              ))}
+            </ol>
+          )}
+          <p className="task-list__history-note">
+            To see who made a change, use Version history in Kontent.ai and hover over the highlighted change.
+          </p>
+        </div>
+      )}
     </div>
   );
 };
 
 TaskListApp.displayName = "TaskListApp";
 
-const readDraft = (key: string): Value | null => {
+const TaskMeta = ({ task }: Readonly<{ task: Task }>) => {
+  const added = lastEvent(task, "added");
+  const completed = task.done ? lastEvent(task, "completed") : undefined;
+  if (!added && !completed) {
+    return null;
+  }
+
+  return (
+    <span className="task-list__meta">
+      {[
+        added && `Added ${formatTime(added.at)}`,
+        completed && `Completed ${formatTime(completed.at)}`,
+      ].filter(Boolean).join(" · ")}
+    </span>
+  );
+};
+
+const eventLabels: Readonly<Record<TaskEventType, string>> = {
+  added: "Added",
+  completed: "Completed",
+  reopened: "Reopened",
+  removed: "Removed",
+};
+
+const createEvent = (type: TaskEventType): TaskEvent => ({ type, at: new Date().toISOString() });
+
+const lastEvent = (task: Task, type: TaskEventType): TaskEvent | undefined =>
+  [...task.events].reverse().find(event => event.type === type);
+
+// All events of all tasks (removed ones included), newest first.
+const collectHistory = (tasks: Value) =>
+  tasks
+    .flatMap(task => task.events.map((event, index) => ({ task, event, index })))
+    .sort((a, b) => b.event.at.localeCompare(a.event.at));
+
+const timeFormat = new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" });
+
+const formatTime = (iso: string): string => {
+  const date = new Date(iso);
+  return isNaN(date.getTime()) ? iso : timeFormat.format(date);
+};
+
+const readLegacyDraft = (key: string): Value | null => {
   try {
     const raw = localStorage.getItem(key);
-    if (!raw) {
-      return null;
-    }
-    const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed as Value : null;
+    const parsed = raw ? parseValue(raw) : null;
+    return parsed === "invalidValue" ? null : parsed;
   }
   catch (e) {
     return null;
   }
 };
 
-const writeDraft = (key: string, tasks: Value) => {
+const removeLegacyDraft = (key: string) => {
   try {
-    localStorage.setItem(key, JSON.stringify(tasks));
+    localStorage.removeItem(key);
   }
   catch (e) {
-    // ignore storage errors (e.g. private browsing mode or quota exceeded) - the task list still
-    // works for the current session, it just won't survive a reload in that case
+    // ignore storage errors (e.g. private browsing mode)
   }
 };
