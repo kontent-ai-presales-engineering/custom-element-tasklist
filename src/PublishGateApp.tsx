@@ -16,6 +16,7 @@ export const PublishGateApp = ({ taskListElement }: Props) => {
   const isDisabled = useIsDisabled();
   // `undefined` until the task list's value has been read for the first time
   const [taskListValue, setTaskListValue] = useState<string | null | undefined>(undefined);
+  const [isReadTimedOut, setIsReadTimedOut] = useState(false);
 
   useEffect(() => {
     const read = () =>
@@ -24,6 +25,17 @@ export const PublishGateApp = ({ taskListElement }: Props) => {
     read();
     CustomElement.observeElementChanges([taskListElement], read);
   }, [taskListElement]);
+
+  // When the element can't be read (wrong codename, or not allowed in "Allow the custom element to
+  // read values of specific elements"), Kontent.ai only logs an error and never calls back.
+  useEffect(() => {
+    if (taskListValue !== undefined) {
+      return;
+    }
+    const timeout = setTimeout(() => setIsReadTimedOut(true), readTimeoutMs);
+
+    return () => clearTimeout(timeout);
+  }, [taskListValue]);
 
   const parsed = taskListValue === undefined ? undefined : parseValue(taskListValue);
   // An unreadable task list blocks publishing rather than silently allowing it.
@@ -43,7 +55,16 @@ export const PublishGateApp = ({ taskListElement }: Props) => {
   }, [parsed === undefined, fulfilled, isDisabled, value]);
 
   if (parsed === undefined) {
-    return <p className="task-list">Checking tasks…</p>;
+    return isReadTimedOut
+      ? (
+        <p className="task-list task-list__status task-list__status--compact task-list__status--incomplete">
+          Can't read the task list element "{taskListElement}", so publishing is blocked. Check that
+          "taskListElement" in this element's configuration is the task list's exact codename (inside a
+          content type snippet it is prefixed, for example "snippet_codename__{taskListElement}") and that the
+          task list is selected under "Allow the custom element to read values of specific elements".
+        </p>
+      )
+      : <p className="task-list">Checking tasks…</p>;
   }
 
   return (
@@ -62,3 +83,5 @@ export const PublishGateApp = ({ taskListElement }: Props) => {
 PublishGateApp.displayName = "PublishGateApp";
 
 const fulfilledValue = "All tasks done";
+
+const readTimeoutMs = 5000;

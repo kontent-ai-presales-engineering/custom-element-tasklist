@@ -110,6 +110,13 @@ Apps, GitHub Pages), then point the custom element's hosted code URL at it.
    Under *Allow the custom element to read values of specific elements*, select the task list
    element, and turn on **Required**.
 
+When both elements live in a **content type snippet**, Kontent.ai prefixes their codenames with
+the snippet's codename (`<snippet_codename>__<element_codename>`), so `taskListElement` must use
+the prefixed codename, for example `working_source__tasks`. Copy it from the element's codename
+field. If the gate can't read the task list within 5 seconds (wrong codename, or the task list
+isn't allowed under *Allow the custom element to read values of specific elements*), it shows an
+error instead of "Checking tasks…" and publishing stays blocked.
+
 ### Upgrading from the single-element version
 
 - Turn **Required** off on the existing task list element and add the gate element as described
